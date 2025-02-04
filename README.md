@@ -4,7 +4,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
 ![JWT](https://img.shields.io/badge/JWT-000000?style=for-the-badge&logo=jsonwebtoken&logoColor=white)
 
-This is a demo application built with FastAPI that demonstrates how to implement JWT (JSON Web Token) authentication. The application includes endpoints for user signup, token issuance, token refreshing, and accessing protected resources.
+This is a demo application built with FastAPI that demonstrates JWT (JSON Web Token) authentication. The application includes endpoints for user signup, token issuance, 2fa token issuance, token refreshing, and accessing protected resources.
 
 
 ## API Endpoints:
@@ -17,6 +17,10 @@ This is a demo application built with FastAPI that demonstrates how to implement
   Returns a pair of access and refresh JWT tokens.  
   **Method**: `POST`
   
+- **`/token/2fa`**:  
+  Verifies 2FA (TOTP) and returns a pair of access and refresh JWT tokens.  
+  **Method**: `POST`
+
 - **`/refresh`**:  
   Returns a new pair of access and refresh tokens. You need to provide a valid refresh token.  
   **Method**: `POST`

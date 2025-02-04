@@ -78,14 +78,12 @@ async def jwt_auth(request: Request) -> None:
     status_code=HTTP_201_CREATED,
     response_model=UserSchema,
     summary="User registration",
-    description="Creates a new user account. Provided email and username must be unique",
+    description="Creates a new user account. Provided email must be unique",
 )
 async def signup(user: UserSignupForm, db: Annotated[Session, Depends(get_db)]) -> models.User:
     # Check if user already exists
     if db.query(models.User).where(models.User.email.is_(user.email)).first():
         raise HTTPException(status_code=400, detail=f"User with email {user.email} already exists")
-    if db.query(models.User).where(models.User.username.is_(user.username)).first():
-        raise HTTPException(status_code=400, detail=f"User with username {user.username} already exists")
 
     # Create user from given data
     password_hash = pwd_context.hash(user.password)

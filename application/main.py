@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Generator, Annotated, Optional, Sequence
 
 import jwt
+import pyotp
 import sqlalchemy
 from fastapi import FastAPI, HTTPException
 from fastapi.params import Depends
@@ -12,7 +13,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from starlette import status
 from starlette.requests import Request
-from starlette.status import HTTP_201_CREATED, HTTP_200_OK
+from starlette.status import HTTP_201_CREATED, HTTP_200_OK, HTTP_401_UNAUTHORIZED
 
 from application import models
 
@@ -43,7 +44,7 @@ class UserSignupForm(BaseModel):
 class UserAuthForm(BaseModel):
     email: str
     password: str
-
+    totp_password: str | None
 
 class Token(BaseModel):
     access_token: str
@@ -56,6 +57,10 @@ class RefreshToken(BaseModel):
 
 class UserSchema(BaseModel):
     username: str
+
+class UserSchemaWithSecret(BaseModel):
+    username: str
+    totp_secret: str
 
 
 async def jwt_auth(request: Request) -> None:
@@ -76,7 +81,7 @@ async def jwt_auth(request: Request) -> None:
 @app.post(
     "/signup",
     status_code=HTTP_201_CREATED,
-    response_model=UserSchema,
+    response_model=UserSchemaWithSecret,
     summary="User registration",
     description="Creates a new user account. Provided email must be unique",
 )
@@ -85,10 +90,16 @@ async def signup(user: UserSignupForm, db: Annotated[Session, Depends(get_db)]) 
     if db.query(models.User).where(models.User.email.is_(user.email)).first():
         raise HTTPException(status_code=400, detail=f"User with email {user.email} already exists")
 
-    # Create user from given data
+    # Generate secret key for disposable passwords
+    totp_secret = pyotp.random_base32()
+
+    # Create user in database
     password_hash = pwd_context.hash(user.password)
     new_user = models.User(
-        username=user.username, email=user.email, password_hash=password_hash
+        username=user.username,
+        email=user.email,
+        password_hash=password_hash,
+        totp_secret=totp_secret
     )
     db.add(new_user)
     db.commit()
@@ -100,9 +111,9 @@ async def signup(user: UserSignupForm, db: Annotated[Session, Depends(get_db)]) 
     status_code=HTTP_200_OK,
     response_model=Token,
     summary="Get access and refresh tokens",
-    description="Authenticates a user using email and password. If successful, returns access and refresh tokens",
+    description="Authenticates a user with email and password. If successful, returns access and refresh tokens",
 )
-async def get_token(user_login: UserAuthForm, db: Annotated[Session, Depends(get_db)]) -> Any:
+async def get_token(user_login: UserAuthForm, db: Annotated[Session, Depends(get_db)]) -> Token:
     authenticate_user(user_login.email, user_login.password, db)
 
     return Token(
@@ -110,6 +121,30 @@ async def get_token(user_login: UserAuthForm, db: Annotated[Session, Depends(get
         refresh_token=create_refresh_token(user_login.email, db),
     )
 
+
+@app.post(
+    "/token/2fa",
+    status_code=HTTP_200_OK,
+    response_model=Token,
+    summary="Verify 2FA and get access and refresh tokens",
+    description="Authenticates a user with email, password, and TOTP code. If successful, returns access and refresh tokens",
+)
+async def get_token_2fa(user_login: UserAuthForm, db: Annotated[Session, Depends(get_db)]) -> Token:
+    if user_login.totp_password is None:
+        raise HTTPException(status_code=HTTP_401_UNAUTHORIZED, detail="TOTP password is required")
+
+    user = authenticate_user(user_login.email, user_login.password, db)
+
+    # Check TOTP password
+    totp_secret = user.totp_secret
+    totp = pyotp.TOTP(totp_secret)
+    if not totp.verify(user_login.totp_password):
+        raise HTTPException(status_code=HTTP_401_UNAUTHORIZED, detail="Incorrect TOTP password")
+
+    return Token(
+        access_token=create_access_token(user_login.email),
+        refresh_token=create_refresh_token(user_login.email, db),
+    )
 
 @app.post(
     "/refresh",
@@ -223,7 +258,8 @@ def get_user_by_email(email: str, db: Session) -> models.User:
     return user
 
 
-def authenticate_user(email: str, password: str, db: Session) -> None:
+def authenticate_user(email: str, password: str, db: Session) -> models.User:
     user = get_user_by_email(email, db)
     if not pwd_context.verify(password, user.password_hash):
         raise HTTPException(status_code=401, detail=f"Incorrect password")
+    return user

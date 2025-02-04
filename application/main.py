@@ -1,6 +1,7 @@
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Generator, Annotated, Optional, Sequence
+from typing import Generator, Annotated, Optional, Sequence, AsyncGenerator
 
 import jwt
 import pyotp
@@ -9,7 +10,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.params import Depends
 from passlib.context import CryptContext
 from pydantic import BaseModel
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from starlette import status
 from starlette.requests import Request
@@ -17,14 +17,19 @@ from starlette.status import HTTP_201_CREATED, HTTP_200_OK, HTTP_401_UNAUTHORIZE
 
 from application import models
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
+    models.init_db()
+    yield
+
+app = FastAPI(lifespan=lifespan)
 
 SECRET_KEY = "6d20267ad3f1e33acf4bb417fb7388cab6dba4e6809c6318baf341cef09fdedf"
 ALGORITHM = "HS256"
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-engine = create_engine("sqlite:///sqlite.db", echo=True)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=models.engine)
 
 
 def get_db() -> Generator[Session]:

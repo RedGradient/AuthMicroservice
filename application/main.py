@@ -71,7 +71,7 @@ class UserSchemaWithSecret(BaseModel):
 async def jwt_auth(request: Request) -> None:
     # Check if there is an Authentication header
     authorization_header = request.headers.get("Authorization")
-    if authorization_header is None:
+    if (authorization_header is None) or (authorization_header == ""):
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, detail="Authorization required"
         )

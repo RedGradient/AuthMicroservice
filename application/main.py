@@ -49,7 +49,7 @@ class UserSignupForm(BaseModel):
 class UserAuthForm(BaseModel):
     email: str
     password: str
-    totp_password: str | None
+    totp_password: str | None = None
 
 class Token(BaseModel):
     access_token: str

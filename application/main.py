@@ -18,15 +18,19 @@ from starlette.status import HTTP_201_CREATED, HTTP_200_OK, HTTP_401_UNAUTHORIZE
 from application import models
 
 
+SECRET_KEY: str
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     models.init_db()
+    with open("private_key.pem", "r") as f:
+        global SECRET_KEY
+        SECRET_KEY = f.read()
     yield
 
 app = FastAPI(lifespan=lifespan)
 
-SECRET_KEY = "6d20267ad3f1e33acf4bb417fb7388cab6dba4e6809c6318baf341cef09fdedf"
-ALGORITHM = "HS256"
+ALGORITHM = "RS256"
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=models.engine)

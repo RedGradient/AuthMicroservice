@@ -2,3 +2,4 @@
 tests/
 /sqlite.db
 .venv
+/keys/

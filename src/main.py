@@ -1,40 +1,26 @@
+import json
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Generator, Annotated, Optional, Sequence, AsyncGenerator
+from pathlib import Path
+from typing import Annotated, Optional, AsyncGenerator, Any, Generator
 
+import bcrypt
 import jwt
 import pyotp
-import sqlalchemy
 from fastapi import FastAPI, HTTPException
 from fastapi.params import Depends
-from passlib.context import CryptContext
-from pydantic import BaseModel
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import Session, sessionmaker
 from starlette import status
-from starlette.requests import Request
 from starlette.status import HTTP_201_CREATED, HTTP_200_OK, HTTP_401_UNAUTHORIZED
 
-from application import models
+from src import models
+from src.models import UserSignupForm, UserAuthForm, Token, UserSchemaWithSecret, RefreshTokenSchema, engine
 
-
-SECRET_KEY: str
-
-@asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
-    models.init_db()
-    with open("private_key.pem", "r") as f:
-        global SECRET_KEY
-        SECRET_KEY = f.read()
-    yield
-
-app = FastAPI(lifespan=lifespan)
-
-ALGORITHM = "RS256"
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=models.engine)
-
+ALGORITHM: str = "RS256"
+KEYS_DIR_PATH: Path = Path("keys")
+PUBLIC_KEYS_PATH: Path = KEYS_DIR_PATH / "public_keys.json"
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def get_db() -> Generator[Session]:
     db = SessionLocal()
@@ -44,47 +30,29 @@ def get_db() -> Generator[Session]:
         db.close()
 
 
-class UserSignupForm(BaseModel):
-    username: str
-    email: str
-    password: str
+SECRET_KEY: str
+keys_store: dict[str, Any]
+def get_public_keys() -> dict[str, Any]:
+    with open(PUBLIC_KEYS_PATH, "r") as f:
+        return json.load(f)  # type: ignore
 
 
-class UserAuthForm(BaseModel):
-    email: str
-    password: str
-    totp_password: str | None = None
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
+    models.init_db()
 
-class Token(BaseModel):
-    access_token: str
-    refresh_token: str
+    global keys_store
+    global SECRET_KEY
 
+    keys_store = get_public_keys()
 
-class RefreshToken(BaseModel):
-    refresh_token: str
+    private_key_path = KEYS_DIR_PATH / f"{keys_store["active_key"]}.pem"
+    with open(private_key_path, "r") as f:
+        SECRET_KEY = f.read()
 
+    yield
 
-class UserSchema(BaseModel):
-    username: str
-
-class UserSchemaWithSecret(BaseModel):
-    username: str
-    totp_secret: str
-
-
-async def jwt_auth(request: Request) -> None:
-    # Check if there is an Authentication header
-    authorization_header = request.headers.get("Authorization")
-    if (authorization_header is None) or (authorization_header == ""):
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED, detail="Authorization required"
-        )
-
-    # Validate token
-    jwt_token = authorization_header.split()[-1]
-    payload = verify_token(jwt_token)
-    if payload["type"] != "access":
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+app = FastAPI(lifespan=lifespan)
 
 
 @app.post(
@@ -103,7 +71,7 @@ async def signup(user: UserSignupForm, db: Annotated[Session, Depends(get_db)]) 
     totp_secret = pyotp.random_base32()
 
     # Create user in database
-    password_hash = pwd_context.hash(user.password)
+    password_hash = bcrypt.hashpw(user.password.encode(), bcrypt.gensalt()).decode()
     new_user = models.User(
         username=user.username,
         email=user.email,
@@ -162,11 +130,11 @@ async def get_token_2fa(user_login: UserAuthForm, db: Annotated[Session, Depends
     summary="Get new access and refresh tokens",
     description="Uses a valid refresh token to generate a new access and refresh tokens",
 )
-def refresh(token: RefreshToken, db: Annotated[Session, Depends(get_db)]) -> Token:
+def refresh(token: RefreshTokenSchema, db: Annotated[Session, Depends(get_db)]) -> Token:
     payload = verify_token(token.refresh_token)
 
     # Check if token is refresh token
-    if ("type" not in payload) or (payload["type"] != "refresh_token"):
+    if ("type" not in payload) or (payload["type"] != "refresh"):
         raise HTTPException(status_code=401, detail="Invalid token")
 
     # Check if refresh token is in database
@@ -186,28 +154,19 @@ def refresh(token: RefreshToken, db: Annotated[Session, Depends(get_db)]) -> Tok
         refresh_token=create_refresh_token(email, db),
     )
 
-
-@app.get(
-    "/users",
-    status_code=HTTP_200_OK,
-    response_model=list[UserSchema],
-    dependencies=[Depends(jwt_auth)],
-    summary="Get all users",
-    description="Returns a list of all users from the database. Authentication with a JWT token is required",
-)
-async def get_users(db: Annotated[Session, Depends(get_db)]) -> Sequence[models.User]:
-    users = db.scalars(sqlalchemy.select(models.User)).all()
-    return users
+@app.post("/public_keys")
+async def get_public_keys_() -> dict[str, Any]:
+    return keys_store
 
 
 def create_access_token(email: str) -> str:
-    data = {
+    headers = { "kid": keys_store["active_key"] }
+    payload = {
         "sub": email,
         "type": "access",
         "exp": datetime.now(timezone.utc) + timedelta(minutes=15),
     }
-    return jwt.encode(data, SECRET_KEY, ALGORITHM)
-
+    return jwt.encode(payload, SECRET_KEY, ALGORITHM, headers=headers)
 
 def create_refresh_token(email: str, db: Session) -> str:
     # Remove old refresh token
@@ -223,13 +182,14 @@ def create_refresh_token(email: str, db: Session) -> str:
 
     # Create refresh token
     jti = str(uuid.uuid4())
-    data = {
+    headers = { "kid": keys_store["active_key"] }
+    payload = {
         "sub": email,
         "jti": jti,
         "type": "refresh",
         "exp": datetime.now(timezone.utc) + timedelta(hours=1),
     }
-    refresh_token = jwt.encode(data, SECRET_KEY, ALGORITHM)
+    refresh_token = jwt.encode(payload, SECRET_KEY, ALGORITHM, headers=headers)
 
     # Save refresh token to DB
     user = get_user_by_email(email, db)
@@ -242,17 +202,24 @@ def create_refresh_token(email: str, db: Session) -> str:
 
 def verify_token(token: str) -> dict[str, str]:
     try:
-        payload: dict[str, str] = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+
+        unverified_header = jwt.get_unverified_header(token)
+        key_id = unverified_header["kid"]
+
+        key_path = f"{KEYS_DIR_PATH}/{key_id}.pub.pem"
+        with open(key_path, "r") as f:
+            public_key = f.read()
+        payload: dict[str, str] = jwt.decode(token, public_key, algorithms=[ALGORITHM])
+
         return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired"
         )
-    except jwt.PyJWTError:
+    except jwt.PyJWTError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
         )
-
 
 def get_user_by_email(email: str, db: Session) -> models.User:
     # Check if user exists
@@ -266,9 +233,8 @@ def get_user_by_email(email: str, db: Session) -> models.User:
 
     return user
 
-
 def authenticate_user(email: str, password: str, db: Session) -> models.User:
     user = get_user_by_email(email, db)
-    if not pwd_context.verify(password, user.password_hash):
+    if not bcrypt.checkpw(password.encode(), user.password_hash.encode()):
         raise HTTPException(status_code=401, detail=f"Incorrect password")
     return user

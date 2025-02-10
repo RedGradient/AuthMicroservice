@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
 
+from pydantic import BaseModel
 from sqlalchemy import String, DateTime, create_engine, Integer, ForeignKey
 from sqlalchemy.orm import mapped_column, Mapped, DeclarativeBase
 
-engine = create_engine("sqlite:///sqlite.db", echo=True)
+engine = create_engine("sqlite:///sqlite.db")
 
 
 class Base(DeclarativeBase):
@@ -37,3 +38,33 @@ class RefreshToken(Base):
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+
+
+class UserSignupForm(BaseModel):
+    username: str
+    email: str
+    password: str
+
+
+class UserAuthForm(BaseModel):
+    email: str
+    password: str
+    totp_password: str | None = None
+
+
+class Token(BaseModel):
+    access_token: str
+    refresh_token: str
+
+
+class UserSchema(BaseModel):
+    username: str
+
+
+class UserSchemaWithSecret(BaseModel):
+    username: str
+    totp_secret: str
+
+
+class RefreshTokenSchema(BaseModel):
+    refresh_token: str

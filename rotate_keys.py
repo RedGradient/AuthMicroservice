@@ -9,7 +9,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import BaseModel
 
-KEYS_DIR_PATH: Path = Path("../keys")
+KEYS_DIR_PATH: Path = Path("keys")
 PUBLIC_KEYS_PATH: Path = KEYS_DIR_PATH / "public_keys.json"
 
 class KeyStore(BaseModel):
@@ -72,9 +72,6 @@ def remove_expired_keys() -> None:
 def generate_key_pair(key_id: str) -> None:
     private_key_path = KEYS_DIR_PATH / f"{key_id}.pem"
     public_key_path = KEYS_DIR_PATH / f"{key_id}.pub.pem"
-
-    # subprocess.run(f"openssl genpkey -algorithm RSA -out {private_key_path}", shell=True)
-    # subprocess.run(f"openssl rsa -pubout -in {private_key_path} -out {public_key_path}", shell=True)
 
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
     public_key = private_key.public_key()

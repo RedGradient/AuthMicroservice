@@ -31,8 +31,8 @@ def get_db() -> Generator[Session]:
 
 
 SECRET_KEY: str
-keys_store: dict[str, Any]
-def get_public_keys() -> dict[str, Any]:
+key_id_store: dict[str, Any]
+def get_public_key_ids() -> dict[str, Any]:
     with open(PUBLIC_KEYS_PATH, "r") as f:
         return json.load(f)  # type: ignore
 
@@ -41,12 +41,12 @@ def get_public_keys() -> dict[str, Any]:
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     models.init_db()
 
-    global keys_store
+    global key_id_store
     global SECRET_KEY
 
-    keys_store = get_public_keys()
+    key_id_store = get_public_key_ids()
 
-    private_key_path = KEYS_DIR_PATH / f"{keys_store["active_key"]}.pem"
+    private_key_path = KEYS_DIR_PATH / f"{key_id_store["active_key"]}.pem"
     with open(private_key_path, "r") as f:
         SECRET_KEY = f.read()
 
@@ -154,13 +154,19 @@ def refresh(token: RefreshTokenSchema, db: Annotated[Session, Depends(get_db)]) 
         refresh_token=create_refresh_token(email, db),
     )
 
-@app.post("/public_keys")
+@app.post("/public-keys")
 async def get_public_keys_() -> dict[str, Any]:
-    return keys_store
+    id_key_mapping: dict[str, str] = {}
+    for key_dict in key_id_store["keys"]:
+        # key_dict is a dictionary with fields: 'id', 'created_at'
+        key_id = key_dict["id"]
+        id_key_mapping[key_id] = open(f"{KEYS_DIR_PATH}/{key_id}.pub.pem").read()
+
+    return id_key_mapping
 
 
 def create_access_token(email: str) -> str:
-    headers = { "kid": keys_store["active_key"] }
+    headers = { "kid": key_id_store["active_key"]}
     payload = {
         "sub": email,
         "type": "access",
@@ -182,7 +188,7 @@ def create_refresh_token(email: str, db: Session) -> str:
 
     # Create refresh token
     jti = str(uuid.uuid4())
-    headers = { "kid": keys_store["active_key"] }
+    headers = { "kid": key_id_store["active_key"]}
     payload = {
         "sub": email,
         "jti": jti,

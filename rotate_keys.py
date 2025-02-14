@@ -1,3 +1,4 @@
+import argparse
 import json
 import os.path
 from datetime import datetime, timedelta
@@ -93,5 +94,14 @@ def generate_key_pair(key_id: str) -> None:
 
 
 if __name__ == "__main__":
-    rotate_keys()
-    # remove_expired_keys()
+    parser = argparse.ArgumentParser(description="Public keys management")
+    parser.add_argument("function", choices=["rotate", "remove"], help="Function to call")
+    args = parser.parse_args()
+
+    # Create 'key' folder if it not exists
+    os.makedirs(KEYS_DIR_PATH, exist_ok=True)
+
+    if args.function == "rotate":
+        rotate_keys()
+    elif args.function == "remove":
+        remove_expired_keys()
